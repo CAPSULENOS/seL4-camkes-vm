@@ -1437,6 +1437,13 @@ static int main_continued(void)
     err = vm_register_smc_handler_callback(&vm, vm_smc_handler);
     assert(!err);
 #endif
+     //added by Peng Xie to enable SMP
+     //use vm name to generate unique ID for each VM instance
+       printf("main_continued:vm_vm_id is %d vm name is %s\n", vm.vm_id, vm.vm_name);//added by Peng Xie
+   if(vm.vm_name[2]=='0')vm.vm_id=0;
+   if(vm.vm_name[2]=='1')vm.vm_id=1;
+   if(vm.vm_name[2]=='2')vm.vm_id=2;
+   printf("main_continued:vm_vm_id is %d vm name is %s\n", vm.vm_id, vm.vm_name);//added by Peng Xie
 
     /* Create CPUs and DTB node */
     for (int i = 0; i < NUM_VCPUS; i++) {
