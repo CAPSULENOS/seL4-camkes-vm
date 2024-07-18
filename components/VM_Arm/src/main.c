@@ -50,6 +50,7 @@
 #include <sel4vmmplatsupport/guest_vcpu_util.h>
 #include <sel4vmmplatsupport/arch/smc.h>
 
+
 #include <sel4utils/process.h>
 #include <sel4utils/irq_server.h>
 #include <dma/dma.h>
@@ -66,6 +67,10 @@
 #include <libfdt.h>
 #include <fdtgen.h>
 #include "fdt_manipulation.h"
+
+
+#include <sel4vm/guest_vm_exits.h> //added by Peng Xie
+#include <sel4vm/arch/guest_arm_context.h>//added by Peng Xie
 
 /* Do - Include prototypes to suppress compiler warnings
  * TODO: Add these to a template header */
@@ -673,6 +678,7 @@ static void irq_handler(void *data, ps_irq_acknowledge_fn_t acknowledge_fn, void
     token->acknowledge_fn = acknowledge_fn;
     token->ack_data = ack_data;
     int err;
+   // printf("irq_handler: before injecting irq into vm\n");//added by Peng Xie
     err = vm_inject_irq(token->vm->vcpus[BOOT_VCPU], token->virq);
     if (err) {
         ZF_LOGW("IRQ %d Dropped", token->virq);
@@ -747,6 +753,7 @@ static int route_irqs(vm_vcpu_t *vcpu, irq_server_t *irq_server)
 {
     int err;
     for (int i = 0; i < ARRAY_SIZE(linux_pt_irqs); i++) {
+	printf("route_irq: linux_pt_irqs!\n");//added by PengXie
         int irq_num = linux_pt_irqs[i];
         err = route_irq(irq_num, vcpu, irq_server);
         if (err) {
@@ -754,8 +761,10 @@ static int route_irqs(vm_vcpu_t *vcpu, irq_server_t *irq_server)
         }
     }
     if (camkes_dtb_get_irqs) {
+	    printf("route_irq: camkes_dtb_get_irqs!\n");//added by PengXie
         int num_dtb_irqs = 0;
         int *dtb_irqs = camkes_dtb_get_irqs(&num_dtb_irqs);
+	printf("route_irq: camkes_dtb_get_irqs! num_dtb_irqs is %d\n", num_dtb_irqs);//added by PengXie
         for (int i = 0; i < num_dtb_irqs; i++) {
             int irq_num = dtb_irqs[i];
             err = route_irq(irq_num, vcpu, irq_server);
@@ -921,8 +930,12 @@ static int load_vm_images(vm_t *vm, const vm_config_t *vm_config)
     if (!entry || err) {
         return -1;
     }
+      
+      if(vm->dtb_loaded) printf("dtb is loaded!\n");
+      else printf("dtb is not loaded yet\n");
 
     /* generate a chosen node */
+      if(!vm->dtb_loaded){//added by Peng Xie
     if (vm_config->generate_dtb) {
         err = fdt_generate_chosen_node(gen_dtb_buf, vm_config->kernel_stdout,
                                        vm_config->kernel_bootcmdline, NUM_VCPUS);
@@ -931,6 +944,7 @@ static int load_vm_images(vm_t *vm, const vm_config_t *vm_config)
             return -1;
         }
     }
+      }//added by Peng Xie
 
     /* Attempt to load initrd if provided */
     guest_image_t initrd_image;
@@ -942,6 +956,7 @@ static int load_vm_images(vm_t *vm, const vm_config_t *vm_config)
         if (!initrd || err) {
             return -1;
         }
+	if(!vm->dtb_loaded){//added by Peng Xie
         if (vm_config->generate_dtb) {
             err = fdt_append_chosen_node_with_initrd_info(gen_dtb_buf,
                                                           vm_config->initrd_addr,
@@ -951,17 +966,21 @@ static int load_vm_images(vm_t *vm, const vm_config_t *vm_config)
                 return -1;
             }
         }
+	}//added by Peng Xie
     }
 
     if (vm_config->generate_dtb) {
         ZF_LOGW_IF(vm_config->provide_dtb,
                    "provide_dtb and generate_dtb are both set. The provided dtb will NOT be loaded");
-        err = vm_dtb_finalize(vm, vm_config);
+    
+
+    	err = vm_dtb_finalize(vm, vm_config);
         if (err) {
             ZF_LOGE("Couldn't generate DTB (%d)", err);
             return -1;
         }
         printf("Loading Generated DTB\n");
+	
         vm_ram_mark_allocated(vm, vm_config->dtb_addr, sizeof(gen_dtb_buf));
         vm_ram_touch(vm, vm_config->dtb_addr, sizeof(gen_dtb_buf), load_generated_dtb,
                      gen_dtb_buf);
@@ -1022,16 +1041,16 @@ int register_async_event_handler(seL4_Word badge, async_event_handler_fn_t callb
 
 static int handle_async_event(vm_t *vm, seL4_Word badge, seL4_MessageInfo_t tag, void *cookie)
 {
-    seL4_Word label = seL4_MessageInfo_get_label(tag);
+    	seL4_Word label = seL4_MessageInfo_get_label(tag);
     if (badge == 0) {
         if (label == IRQ_MESSAGE_LABEL) {
-            irq_server_handle_irq_ipc(_irq_server, tag);
+		irq_server_handle_irq_ipc(_irq_server, tag);
         } else {
             ZF_LOGE("Unknown label (%"SEL4_PRId_word")", label);
         }
 #ifdef FEATURE_VUSB
     } else if (badge == VUSB_NBADGE) {
-        vusb_notify();
+	    vusb_notify();
 #endif
     } else {
         bool found_handler = false;
@@ -1160,6 +1179,168 @@ int vm_smc_handler(vm_vcpu_t *vcpu, seL4_UserContext *regs)
 }
 #endif
 
+
+//added by Peng Xie copy from fault.c
+#define PREG(regs, r)    printf(#r ": 0x%lx\n", regs->r)
+static void print_ctx_aarch64_regs(seL4_UserContext *regs)
+{
+    PREG(regs, x0);
+    PREG(regs, x1);
+    PREG(regs, x2);
+    PREG(regs, x3);
+    PREG(regs, x4);
+    PREG(regs, x5);
+    PREG(regs, x6);
+    PREG(regs, x7);
+    PREG(regs, x8);
+    PREG(regs, x9);
+    PREG(regs, x10);
+    PREG(regs, x11);
+    PREG(regs, x12);
+    PREG(regs, pc);
+    PREG(regs, x14);
+    PREG(regs, sp);
+    PREG(regs, spsr);
+    PREG(regs, x13);
+    PREG(regs, x15);
+    PREG(regs, x16);
+    PREG(regs, x17);
+    PREG(regs, x18);
+    PREG(regs, x19);
+    PREG(regs, x20);
+    PREG(regs, x21);
+    PREG(regs, x22);
+    PREG(regs, x23);
+    PREG(regs, x24);
+    PREG(regs, x25);
+    PREG(regs, x26);
+    PREG(regs, x27);
+    PREG(regs, x28);
+    PREG(regs, x29);
+    PREG(regs, x30);
+    PREG(regs,tpidr_el0);
+    PREG(regs,tpidrro_el0);
+}
+                
+//added by Peng Xie
+static int stop_VM(vm_t* vm){
+  printf("stop_VM: stop the old VM....\n");
+  int err;
+ // vm_vcpu_t *vm_vcpu = vm->vcpus[BOOT_VCPU];
+  int num_cpus=vm->num_vcpus;
+
+  for(int i=0;i<num_cpus;i++){  
+    err = vcpu_stop(vm->vcpus[i]);
+    if (err) {
+	printf("stop_VM: failed to stop the vcpu %d\n",i);    
+        ZF_LOGE("Failed to stop a VCPU");
+    }
+  }
+
+  printf("stop_VM: initializing dtb...\n");
+    err = vm_dtb_init(vm, &vm_config);
+    if (err) {
+        ZF_LOGE("Failed to init DTB (%d)", err);
+        return -1;
+    }
+
+   printf("stop_VM: initializing pci...\n");
+   err = vmm_pci_reset(&pci);
+    if (err) {
+        ZF_LOGE("Failed to initialise vmm pci");
+        return err;
+    }
+    
+    printf("stop_VM: reset i/o port...\n");
+    err = vmm_io_port_reset(&io_ports, FREE_IOPORT_START);
+    if (err) {
+        ZF_LOGE("Failed to initialise VM ioports");
+        return err;
+    }
+
+     //reset the irq controller 
+       printf("stop_VM: reset irq controller!\n");
+       err = vm_reset_default_irq_controller(vm);
+       assert(!err);
+
+
+        printf("stop_VM: reset cpu!\n");
+        for (int i = 0; i < NUM_VCPUS; i++) {
+        vm_vcpu_t *vcpu = reset_vmm_plat_vcpu(vm, VM_PRIO - 1);
+        assert(vcpu);
+        }
+
+	if (vm_config.generate_dtb) {
+        err = fdt_generate_plat_vcpu_node(vm, gen_dtb_buf);
+        if (err) {
+            ZF_LOGE("Couldn't generate plat_vcpu_node (%d)", err);
+            return -1;
+        }
+        }
+	
+    vm_vcpu_t* vm_vcpu = vm->vcpus[BOOT_VCPU];
+    err = vm_assign_vcpu_target(vm_vcpu, 0);
+    if (err) {
+        return -1;
+    }
+
+    /* Route IRQs */
+
+    err = route_irqs(vm_vcpu, _irq_server);
+    if (err) {
+        return -1;
+    }
+
+     /* re-set the VM's RAM */
+    err = vm_ram_reset(vm);
+    if (err) {
+        ZF_LOGE("Error: Failed to reset VM RAM");
+        seL4_DebugHalt();
+        return -1;
+    }
+  
+    printf("stop_VM: load vm image again! num_ram_region is %d\n",vm->mem.num_ram_regions);// added by Peng Xie
+    // Load system images 
+    //vm->dtb_loaded=true;
+    err = load_vm_images(vm, &vm_config);
+    if (err) {
+        ZF_LOGE("Failed to load VM image");
+        seL4_DebugHalt();
+        return -1;
+    }
+     
+    printf("stop_VM: restart the old VM....\n");
+    for(int i=0;i<num_cpus;i++){
+    err = vcpu_start(vm->vcpus[i]);
+    if (err) {
+        printf("stop_VM: failed to restart the vcpu %d!\n", i);
+        ZF_LOGE("Failed to restart a VCPU");
+     }
+    }
+
+  int stop=0;
+  printf("stop_VM: vm_run !\n");// added by Peng Xie
+
+   while(!stop){
+    err = vm_run(vm);
+        if (err) {
+            printf("stop_VM: vm exit !!!\n");
+             if(vm->run.exit_reason == VM_GUEST_TIMEOUT_EXIT){
+             printf("stop_VM: VM guest time out !!!\n");
+             stop=1;
+             }
+             else{
+            ZF_LOGE("Failed to run VM");
+            seL4_DebugHalt();
+            return -1;
+             }
+        }
+    }
+
+   return 1;
+}
+
+
 static int main_continued(void)
 {
     vm_t vm;
@@ -1256,6 +1437,13 @@ static int main_continued(void)
     err = vm_register_smc_handler_callback(&vm, vm_smc_handler);
     assert(!err);
 #endif
+     //added by Peng Xie to enable SMP
+     //use vm name to generate unique ID for each VM instance
+       printf("main_continued:vm_vm_id is %d vm name is %s\n", vm.vm_id, vm.vm_name);//added by Peng Xie
+   if(vm.vm_name[2]=='0')vm.vm_id=0;
+   if(vm.vm_name[2]=='1')vm.vm_id=1;
+   if(vm.vm_name[2]=='2')vm.vm_id=2;
+   printf("main_continued:vm_vm_id is %d vm name is %s\n", vm.vm_id, vm.vm_name);//added by Peng Xie
 
     /* Create CPUs and DTB node */
     for (int i = 0; i < NUM_VCPUS; i++) {
@@ -1298,21 +1486,42 @@ static int main_continued(void)
         return -1;
     }
 
+    /* print the VCPU registers
+    seL4_UserContext regs;
+    err = vm_get_thread_context(vm_vcpu, &regs);
+    if (err) {
+        ZF_LOGE("Failed to get vcpu registers to decode smc fault");
+        return -1;
+    }
+    printf("main_continued:cpu status after load vm image!\n");
+    print_ctx_aarch64_regs(&regs);
+    */
+
     err = vcpu_start(vm_vcpu);
     if (err) {
         ZF_LOGE("Failed to start Boot VCPU");
         return -1;
     }
-
-    while (1) {
-        err = vm_run(&vm);
+   int stop=0;
+   // while (1) {
+   while(!stop){   
+    err = vm_run(&vm);
         if (err) {
-            ZF_LOGE("Failed to run VM");
+		//-----added by Peng Xie
+            printf("main_contined: vm exit !!!\n");//added by Peng Xie
+             if(vm.run.exit_reason == VM_GUEST_TIMEOUT_EXIT){
+	     printf("main_contined: VM guest time out !!!\n");//added by Peng Xie
+	     stop=1;
+	     }
+	     else{
+	    ZF_LOGE("Failed to run VM");
             seL4_DebugHalt();
             return -1;
+	     }//added by Peng Xie
         }
     }
-
+    printf("main_contined: stop the current vm  !!!\n");//added by Peng Xie
+    stop_VM(&vm);//added by Peng Xie
     return 0;
 }
 
@@ -1326,6 +1535,7 @@ int run(void)
     if (&base_prio != NULL) {
         VM_PRIO = base_prio;
     }
+    //printf("run: num_cpus is %d  !!!\n", num_vcpus);//added by Peng Xie
     /* if the num_vcpus attribute is set, try to use it */
     if (&num_vcpus != NULL) {
         if (num_vcpus > CONFIG_MAX_NUM_NODES) {
