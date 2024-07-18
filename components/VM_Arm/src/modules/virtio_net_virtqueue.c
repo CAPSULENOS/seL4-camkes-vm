@@ -50,7 +50,8 @@ static int tx_virtqueue_forward(char *eth_buffer, size_t length, virtio_net_t *v
     /* If a packet is not a broadcast packet, determine if we have the unicast destination on the
      * vswitch
      */
-    if (mac802_addr_eq_bcast(destaddr) || mac802_addr_eq_ipv6_mcast(destaddr)) {
+    bool is_broadcast = (mac802_addr_eq_bcast(destaddr) || mac802_addr_eq_ipv6_mcast(destaddr));
+    if (!is_broadcast) {
         for (int i = destnode_start_idx; i < destnode_start_idx + destnode_n_idxs; i++) {
             vswitch_node_t *destnode;
             destnode = vswitch_get_destnode_by_index(&virtio_vswitch, i);
