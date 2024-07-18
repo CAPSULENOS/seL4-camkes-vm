@@ -46,6 +46,30 @@ static int tx_virtqueue_forward(char *eth_buffer, size_t length, virtio_net_t *v
 
     destnode_n_idxs = virtio_vswitch.n_connected;
     destnode_start_idx = 0;
+
+    /* If a packet is not a broadcast packet, determine if we have the unicast destination on the
+     * vswitch
+     */
+    if (mac802_addr_eq_bcast(destaddr) || mac802_addr_eq_ipv6_mcast(destaddr)) {
+        for (int i = destnode_start_idx; i < destnode_start_idx + destnode_n_idxs; i++) {
+            vswitch_node_t *destnode;
+            destnode = vswitch_get_destnode_by_index(&virtio_vswitch, i);
+            if (destnode == NULL) {
+                /* This could happen in the broadcast case if there are holes in
+                 * the array, though that would still be odd.
+                 */
+                continue;
+            }
+
+            if (mac802_addr_eq(destaddr, &destnode->addr)) {
+                destnode_start_idx = i;
+                destnode_n_idxs = 1;
+                break;
+            }
+        }
+    }
+
+    /* Send the packet to all relevant destination indices */
     for (int i = destnode_start_idx; i < destnode_start_idx + destnode_n_idxs; i++) {
         vswitch_node_t *destnode;
         destnode = vswitch_get_destnode_by_index(&virtio_vswitch, i);
