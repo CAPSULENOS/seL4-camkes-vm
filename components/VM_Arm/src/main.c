@@ -1226,7 +1226,6 @@ static void print_ctx_aarch64_regs(seL4_UserContext *regs)
 static int stop_VM(vm_t* vm){
   printf("stop_VM: stop the old VM....\n");
   int err;
- // vm_vcpu_t *vm_vcpu = vm->vcpus[BOOT_VCPU];
   int num_cpus=vm->num_vcpus;
 
   for(int i=0;i<num_cpus;i++){  
@@ -1243,14 +1242,17 @@ static int stop_VM(vm_t* vm){
         ZF_LOGE("Failed to init DTB (%d)", err);
         return -1;
     }
-
+#if CONFIG_ENABLE_SMP_SUPPORT 
+   printf("stop_VM: SMP is enabled!\n");
+#else 
+   printf("stop_VM: SMP is not enabled!\n");
    printf("stop_VM: initializing pci...\n");
    err = vmm_pci_reset(&pci);
     if (err) {
         ZF_LOGE("Failed to initialise vmm pci");
         return err;
     }
-    
+#endif
     printf("stop_VM: reset i/o port...\n");
     err = vmm_io_port_reset(&io_ports, FREE_IOPORT_START);
     if (err) {
@@ -1430,6 +1432,14 @@ static int main_continued(void)
     ZF_LOGF_IF(err, "Failed to bind CB to SID");
 #endif /* CONFIG_ARM_SMMU */
 
+    //added by Peng Xie to enable SMP
+     //use vm name to generate unique ID for each VM instance
+      printf("main_continued:vm_vm_id is %d vm name is %s\n", vm.vm_id, vm.vm_name);//added by Peng Xie
+   if(vm.vm_name[2]=='0')vm.vm_id=0;
+   if(vm.vm_name[2]=='1')vm.vm_id=1;
+   if(vm.vm_name[2]=='2')vm.vm_id=2;
+   printf("main_continued:vm_vm_id is %d vm name is %s\n", vm.vm_id, vm.vm_name);//added by Peng Xie
+
     err = vm_create_default_irq_controller(&vm);
     assert(!err);
 
@@ -1437,14 +1447,6 @@ static int main_continued(void)
     err = vm_register_smc_handler_callback(&vm, vm_smc_handler);
     assert(!err);
 #endif
-     //added by Peng Xie to enable SMP
-     //use vm name to generate unique ID for each VM instance
-       printf("main_continued:vm_vm_id is %d vm name is %s\n", vm.vm_id, vm.vm_name);//added by Peng Xie
-   if(vm.vm_name[2]=='0')vm.vm_id=0;
-   if(vm.vm_name[2]=='1')vm.vm_id=1;
-   if(vm.vm_name[2]=='2')vm.vm_id=2;
-   printf("main_continued:vm_vm_id is %d vm name is %s\n", vm.vm_id, vm.vm_name);//added by Peng Xie
-
     /* Create CPUs and DTB node */
     for (int i = 0; i < NUM_VCPUS; i++) {
         vm_vcpu_t *new_vcpu = create_vmm_plat_vcpu(&vm, VM_PRIO - 1);
